@@ -13,45 +13,6 @@ information assistant.
 > emergency service. Medical information and hospital availability must
 > be verified before users rely on them.
 
-## Table of Contents
-
-- [Problem Statement](#problem-statement)
-- [Objectives](#objectives)
-- [Features](#features)
-- [Languages and Accessibility](#languages-and-accessibility)
-- [How It Works](#how-it-works)
-- [Suggested Architecture](#suggested-architecture)
-- [Technology Stack](#technology-stack)
-- [Privacy and Security](#privacy-and-security)
-- [Safety and Limitations](#safety-and-limitations)
-- [Development Roadmap](#development-roadmap)
-- [Getting Started](#getting-started)
-- [Future Enhancements](#future-enhancements)
-- [Disclaimer](#disclaimer)
-
-## Problem Statement
-
-People may have difficulty finding current hospital-bed information,
-understanding prescriptions, remembering medicine schedules, or
-accessing clear first-aid information in a familiar language. These
-challenges can be especially difficult for older adults and caregivers.
-
-CareBridge AI aims to provide a single, easy-to-use interface for
-healthcare-support tools, with clear communication and appropriate
-referrals to qualified professionals.
-
-## Objectives
-
-- Make hospital and bed information easier to search.
-- Help users review and understand prescription text without changing
-  the prescriber’s instructions.
-- Support user-configured medicine reminders.
-- Present general first-aid information in simple language.
-- Provide multilingual healthcare information.
-- Clearly communicate uncertainty and direct users to professional care
-  when necessary.
-- Offer an accessible, responsive experience on mobile and desktop.
-
 ## Features
 
 ### 1. Hospital Bed Finder
