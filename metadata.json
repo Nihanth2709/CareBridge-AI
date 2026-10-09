@@ -1,0 +1,7 @@
+{
+  "name": "CareBridge AI - Health & First Aid Assistant",
+  "description": "Simple and intuitive health companion featuring AI prescription scanning, instant visual first-aid guidance, AI symptom chat, and emergency hospital bed locator.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
