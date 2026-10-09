@@ -229,10 +229,25 @@ Required safety behavior:
 
 ### If using exported source code
 
-Follow the setup instructions for the actual framework and repository. A
-Flutter project and a web project use different tools and run commands.
-Add the verified dependency installation and run commands for your
-repository here rather than using commands from a different framework.
+This repository uses a Vite/React frontend and an Express backend.
+
+1. Install dependencies with `npm install`.
+2. Copy `.env.example` to `.env.local` and set `GEMINI_API_KEY` plus the
+   Firebase Web app values (`VITE_FIREBASE_*`) from Firebase Console >
+   Project settings > General > Your apps.
+3. In Firebase Console, enable **Authentication > Sign-in method >
+   Anonymous** and create a **Cloud Firestore** database. Open Firestore
+   **Rules**, paste the contents of [firestore.rules](./firestore.rules),
+   and publish the rules.
+4. Start the app with `npm run dev`.
+
+The app signs in anonymously and stores each user's reminders and
+emergency contacts in Firestore. Existing `carebridge_reminders` and
+`carebridge_personal_contacts` browser data is migrated on first
+connection, then changes sync in real time. Anonymous identity is
+retained by the browser, so data remains available in that browser/device
+but is not linked across devices. Without Firebase configuration, the
+app continues saving locally.
 
 ## Future Enhancements
 

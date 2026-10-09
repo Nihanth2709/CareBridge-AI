@@ -75,6 +75,15 @@ import {
   setupSpeechRecognition,
   AudioRecordingSession,
 } from './utils/audio';
+import { firebaseAuth, firebaseConfigured, firestoreDb } from './firebase';
+import { onAuthStateChanged, signInAnonymously } from 'firebase/auth';
+import {
+  doc,
+  getDoc,
+  onSnapshot,
+  serverTimestamp,
+  setDoc,
+} from 'firebase/firestore';
 
 type Tab = 'rx' | 'lab' | 'voice' | 'reminders' | 'aid' | 'beds';
 
@@ -122,6 +131,21 @@ interface ChatMessage {
   text: string;
   isEmergency?: boolean;
   timestamp: string;
+}
+
+type SyncStatus = 'local' | 'connecting' | 'synced' | 'error';
+
+function readStoredArray<T>(key: string, fallback: T[]): T[] {
+  try {
+    const saved = localStorage.getItem(key);
+    if (!saved) return fallback;
+    const parsed: unknown = JSON.parse(saved);
+    if (Array.isArray(parsed)) return parsed as T[];
+    console.warn(`Ignoring invalid saved data for ${key}`);
+  } catch (error) {
+    console.warn(`Could not read ${key} from localStorage`, error);
+  }
+  return fallback;
 }
 
 const DEFAULT_REMINDERS: MedicineReminder[] = [
@@ -327,6 +351,11 @@ export default function App() {
   const [largeText, setLargeText] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [syncStatus, setSyncStatus] = useState<SyncStatus>('connecting');
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [firebaseUid, setFirebaseUid] = useState<string | null>(null);
+  const cloudRemindersRef = useRef<MedicineReminder[]>([]);
+  const cloudContactsRef = useRef<PersonalEmergencyContact[]>([]);
 
   // Emergency Contacts & SOS Hub State
   const [showEmergencyModal, setShowEmergencyModal] = useState(false);
@@ -454,6 +483,172 @@ export default function App() {
       console.warn('Could not save reminders to localStorage', e);
     }
   }, [reminders]);
+
+  useEffect(() => {
+    const auth = firebaseAuth;
+    const database = firestoreDb;
+    if (!firebaseConfigured || !auth || !database) {
+      setSyncStatus('local');
+      return;
+    }
+
+    let active = true;
+    let signInInProgress = false;
+    let initializedUid: string | null = null;
+    const dataUnsubscribers: Array<() => void> = [];
+
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        if (!signInInProgress) {
+          signInInProgress = true;
+          void signInAnonymously(auth)
+            .catch((error: unknown) => {
+              if (!active) return;
+              console.error('Firebase anonymous sign-in failed:', error);
+              setSyncError('Could not sign in to Firebase. Your data is still saved on this device.');
+              setSyncStatus('error');
+            })
+            .finally(() => {
+              signInInProgress = false;
+            });
+        }
+        return;
+      }
+
+      if (!active || initializedUid === user.uid) return;
+      initializedUid = user.uid;
+      setSyncStatus('connecting');
+      setSyncError(null);
+
+      const remindersRef = doc(database, 'users', user.uid, 'private', 'reminders');
+      const contactsRef = doc(database, 'users', user.uid, 'private', 'contacts');
+
+      void Promise.all([getDoc(remindersRef), getDoc(contactsRef)])
+        .then(async ([remindersSnapshot, contactsSnapshot]) => {
+          if (!active) return;
+
+          if (remindersSnapshot.exists() && !Array.isArray(remindersSnapshot.data().items)) {
+            throw new Error('Firebase reminder data is not a list.');
+          }
+          if (contactsSnapshot.exists() && !Array.isArray(contactsSnapshot.data().items)) {
+            throw new Error('Firebase contact data is not a list.');
+          }
+
+          const initialReminders = remindersSnapshot.exists()
+            ? remindersSnapshot.data().items as MedicineReminder[]
+            : readStoredArray('carebridge_reminders', DEFAULT_REMINDERS);
+          const initialContacts = contactsSnapshot.exists()
+            ? contactsSnapshot.data().items as PersonalEmergencyContact[]
+            : readStoredArray('carebridge_personal_contacts', DEFAULT_EMERGENCY_CONTACTS);
+
+          if (!remindersSnapshot.exists()) {
+            await setDoc(remindersRef, { items: initialReminders, updatedAt: serverTimestamp() });
+          }
+          if (!contactsSnapshot.exists()) {
+            await setDoc(contactsRef, { items: initialContacts, updatedAt: serverTimestamp() });
+          }
+          if (!active) return;
+
+          cloudRemindersRef.current = initialReminders;
+          cloudContactsRef.current = initialContacts;
+          setReminders(initialReminders);
+          setPersonalContacts(initialContacts);
+          setFirebaseUid(user.uid);
+          setSyncStatus('synced');
+
+          dataUnsubscribers.push(
+            onSnapshot(
+              remindersRef,
+              (snapshot) => {
+                if (!snapshot.exists()) return;
+                const items = snapshot.data().items;
+                if (!Array.isArray(items)) {
+                  setSyncError('Firebase returned invalid reminder data.');
+                  setSyncStatus('error');
+                  return;
+                }
+                const nextReminders = items as MedicineReminder[];
+                cloudRemindersRef.current = nextReminders;
+                setReminders((current) =>
+                  JSON.stringify(current) === JSON.stringify(nextReminders) ? current : nextReminders
+                );
+              },
+              (error) => {
+                console.error('Firebase reminder sync failed:', error);
+                setSyncError('Could not sync medicine reminders with Firebase.');
+                setSyncStatus('error');
+              }
+            ),
+            onSnapshot(
+              contactsRef,
+              (snapshot) => {
+                if (!snapshot.exists()) return;
+                const items = snapshot.data().items;
+                if (!Array.isArray(items)) {
+                  setSyncError('Firebase returned invalid contact data.');
+                  setSyncStatus('error');
+                  return;
+                }
+                const nextContacts = items as PersonalEmergencyContact[];
+                cloudContactsRef.current = nextContacts;
+                setPersonalContacts((current) =>
+                  JSON.stringify(current) === JSON.stringify(nextContacts) ? current : nextContacts
+                );
+              },
+              (error) => {
+                console.error('Firebase contact sync failed:', error);
+                setSyncError('Could not sync emergency contacts with Firebase.');
+                setSyncStatus('error');
+              }
+            )
+          );
+        })
+        .catch((error: unknown) => {
+          if (!active) return;
+          console.error('Firebase data initialization failed:', error);
+          setSyncError('Could not load your Firebase data. Your local data is still available.');
+          setSyncStatus('error');
+        });
+    });
+
+    return () => {
+      active = false;
+      unsubscribeAuth();
+      dataUnsubscribers.forEach((unsubscribe) => unsubscribe());
+    };
+  }, []);
+
+  useEffect(() => {
+    const database = firestoreDb;
+    if (!firebaseUid || !database || syncStatus === 'connecting') return;
+    if (JSON.stringify(reminders) === JSON.stringify(cloudRemindersRef.current)) return;
+
+    cloudRemindersRef.current = reminders;
+    void setDoc(doc(database, 'users', firebaseUid, 'private', 'reminders'), {
+      items: reminders,
+      updatedAt: serverTimestamp(),
+    }).catch((error: unknown) => {
+      console.error('Could not save medicine reminders to Firebase:', error);
+      setSyncError('Could not save medicine reminders to Firebase. Changes remain on this device.');
+      setSyncStatus('error');
+    });
+  }, [firebaseUid, reminders, syncStatus]);
+
+  useEffect(() => {
+    const database = firestoreDb;
+    if (!firebaseUid || !database || syncStatus === 'connecting') return;
+    if (JSON.stringify(personalContacts) === JSON.stringify(cloudContactsRef.current)) return;
+
+    cloudContactsRef.current = personalContacts;
+    void setDoc(doc(database, 'users', firebaseUid, 'private', 'contacts'), {
+      items: personalContacts,
+      updatedAt: serverTimestamp(),
+    }).catch((error: unknown) => {
+      console.error('Could not save emergency contacts to Firebase:', error);
+      setSyncError('Could not save emergency contacts to Firebase. Changes remain on this device.');
+      setSyncStatus('error');
+    });
+  }, [firebaseUid, personalContacts, syncStatus]);
 
   // ----------------------------------------------------
   // FIRST AID STATE
@@ -1122,6 +1317,23 @@ export default function App() {
 
         {/* ----------------- MAIN SCROLL CONTENT ----------------- */}
         <main className="flex-1 overflow-y-auto px-4 py-3 pb-24 space-y-4">
+          {syncStatus === 'local' ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900" role="status">
+              Firebase is not configured. Your reminders and emergency contacts are saved only on this device.
+            </div>
+          ) : syncError ? (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800" role="alert">
+              {syncError}
+            </div>
+          ) : syncStatus === 'connecting' ? (
+            <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800" role="status">
+              Connecting to Firebase and loading your saved data…
+            </div>
+          ) : (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800" role="status">
+              Your reminders and emergency contacts are synced to Firebase.
+            </div>
+          )}
 
           {/* ========================================================== */}
           {/* TAB 1: PRESCRIPTION SCANNER                                */}
